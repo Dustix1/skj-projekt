@@ -161,6 +161,9 @@ def db_get_undelivered(topic: str):
 
 app = FastAPI(title="Cloud Object Storage & Message Broker")
 
+# --- AUTO-CREATE TABLES ---
+Base.metadata.create_all(bind=engine)
+
 # --- BACKGROUND WORKER PRO STORAGE ACK ---
 async def haystack_ack_worker():
     uri = "ws://127.0.0.1:8000/broker"
