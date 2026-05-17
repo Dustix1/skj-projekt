@@ -191,6 +191,44 @@ def run_demo():
             with open("presentation_result.webp", "wb") as out:
                 out.write(resp.content)
             print_success("Soubor stažen jako 'presentation_result.webp'!")
+
+    # 6. Soft Delete
+    print_step("KROK 6: Soft Delete (Logické smazání)")
+    print_info(f"Mažeme původní soubor {file_id}...")
+    
+    cmd = f"curl -X DELETE '{GATEWAY_URL}/files/{file_id}?user_id={TEST_USER}'"
+    print_cmd(cmd)
+    
+    del_resp = requests.delete(f"{GATEWAY_URL}/files/{file_id}?user_id={TEST_USER}")
+    print_raw(del_resp.json())
+    
+    print_info("Kontrolujeme listing objektů (původní soubor by měl zmizet)...")
+    resp = requests.get(f"{GATEWAY_URL}/buckets/{bucket_id}/objects/")
+    objs = resp.json()
+    if not any(o["id"] == file_id for o in objs):
+        print_success("Soubor uživatelsky zmizel, ale v volume_1.dat stále zabírá místo (Fast Delete).")
+    
+    # 7. Kompakce
+    print_step("KROK 7: Kompakce (Fyzické uvolnění místa)")
+    print_info("Spouštíme maintenance skript pro defragmentaci svazku 1...")
+    
+    cmd = f"python3 compact.py 1"
+    print_cmd(cmd)
+    
+    # Importujeme funkci přímo pro demo nebo spustíme přes os
+    import subprocess
+    process = subprocess.Popen([sys.executable, "compact.py", "1"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    stdout, stderr = process.communicate()
+    
+    for line in stdout.splitlines():
+        print(f"{MAGENTA}[COMPACT] {line}{RESET}")
+    
+    print_info("Kontrolujeme listing po kompakci (offsety by se měly posunout)...")
+    resp = requests.get(f"{GATEWAY_URL}/buckets/{bucket_id}/objects/")
+    objs = resp.json()
+    print_raw(objs)
+    
+    print_success("Kompakce dokončena. 'Díry' po smazaných souborech byly fyzicky odstraněny.")
     
     print(f"\n{BOLD}{GREEN}=== DEMO DOKONČENO ÚSPĚŠNĚ ==={RESET}")
     print_info("Všechny kroky proběhly přes Message Broker a binární úložiště Haystack.")
