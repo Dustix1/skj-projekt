@@ -2,9 +2,14 @@ import requests
 import time
 import json
 import sys
+import threading
+import asyncio
+import websockets
+import msgpack
 
 # Konfigurace
 GATEWAY_URL = "http://127.0.0.1:8000"
+WS_URL = "ws://127.0.0.1:8000/broker"
 TEST_USER = "dustix_presenter"
 TEST_FILE = "choese.webp"
 
@@ -16,6 +21,7 @@ CYAN = "\033[96m"
 RESET = "\033[0m"
 BOLD = "\033[1m"
 MAGENTA = "\033[95m"
+RED = "\033[91m"
 
 def print_step(msg):
     print(f"\n{BOLD}{BLUE}>>> {msg}{RESET}")
@@ -26,14 +32,50 @@ def print_cmd(cmd):
 def print_raw(data):
     print(f"{RESET}{json.dumps(data, indent=2)}")
 
+def print_broker(msg):
+    print(f"{YELLOW}[BROKER] {msg}{RESET}")
+
 def print_info(msg):
     print(f"{CYAN}[i] {msg}{RESET}")
 
 def print_success(msg):
     print(f"{GREEN}[✓] {msg}{RESET}")
 
+# --- BROKER MONITOR THREAD ---
+def broker_monitor():
+    async def listen():
+        try:
+            async with websockets.connect(WS_URL) as ws:
+                # Odebíráme všechna důležitá témata pro demo
+                topics = ["storage.write", "storage.ack", "image.jobs", "image.done"]
+                for t in topics:
+                    await ws.send(msgpack.packb({"action": "subscribe", "topic": t}))
+                
+                while True:
+                    raw = await ws.recv()
+                    data = msgpack.unpackb(raw)
+                    if data.get("action") == "deliver":
+                        topic = data.get("topic")
+                        payload = data.get("payload")
+                        # Zkrátíme binární data pro výpis
+                        display_payload = payload.copy()
+                        if "data" in display_payload:
+                            display_payload["data"] = f"<{len(payload['data'])} bytes of binary data>"
+                        
+                        print_broker(f"Téma: {BOLD}{topic}{RESET} | Zpráva: {json.dumps(display_payload)}")
+        except Exception as e:
+            pass
+
+    asyncio.run(listen())
+
 def run_demo():
     print(f"{BOLD}{YELLOW}=== HAYSTACK ARCHITEKTURA: LIVE DEMO ==={RESET}")
+    print_info("Spouštím monitorování Message Brokeru na pozadí...")
+    
+    # Start monitoringu v samostatném vlákně
+    monitor_thread = threading.Thread(target=broker_monitor, daemon=True)
+    monitor_thread.start()
+    time.sleep(1) # Čas na připojení
 
     # 1. Vytvoření Bucketů
     print_step("KROK 1: Vytváření nového bucketu")
@@ -70,10 +112,7 @@ def run_demo():
 
     # 3. Čekání na ACK od Haystacku
     print_step("KROK 3: Čekání na potvrzení (ACK) od Haystack Storage Node")
-    print_info("Pravidelně kontrolujeme listing objektů, dokud nedorazí potvrzení z Brokeru...")
-    
-    cmd = f"curl {GATEWAY_URL}/buckets/{bucket_id}/objects/"
-    print_cmd(cmd)
+    print_info("Sledujte [BROKER] výpis nahoře. Měly by se objevit zprávy 'storage.write' a 'storage.ack'.")
     
     ready = False
     for i in range(10):
@@ -83,13 +122,12 @@ def run_demo():
         f_meta = next((o for o in objs if o["id"] == file_id), None)
         
         if f_meta and f_meta["status"] == "ready":
-            print_success(f"Pokus {i+1}: Zápis potvrzen!")
+            print_success(f"Zápis potvrzen!")
             print_raw(f_meta)
-            print(f"{GREEN}[✓] Soubor je ve Volume {f_meta['volume_id']} na offsetu {f_meta['offset']}.{RESET}")
             ready = True
             break
         else:
-            print_info(f"Pokus {i+1}: Status je stále '{f_meta['status'] if f_meta else 'neznámý'}'")
+            print_info(f"Pokus {i+1}: Čekám na ACK...")
     
     if not ready:
         print("Demo selhalo: ACK nedorazil včas.")
@@ -109,7 +147,7 @@ def run_demo():
     )
     print_raw(process_resp.json())
     
-    print_info("Čekám na zpracování a nový upload od Workera...")
+    print_info("Čekám na workerovy zprávy 'image.jobs' a následný upload...")
     processed_id = None
     for i in range(15):
         time.sleep(1.5)
@@ -118,7 +156,7 @@ def run_demo():
         processed = next((o for o in objs if o["filename"].startswith("negative_")), None)
         if processed and processed["status"] == "ready":
             processed_id = processed["id"]
-            print_success(f"Pokus {i+1}: Obrázek zpracován a uložen!")
+            print_success("Obrázek zpracován!")
             print_raw(processed)
             break
         else:
@@ -138,10 +176,10 @@ def run_demo():
             with open("presentation_result.webp", "wb") as out:
                 out.write(resp.content)
             print_success("Soubor stažen jako 'presentation_result.webp'!")
-            print_info(f"Velikost: {len(resp.content)} bajtů")
     
     print(f"\n{BOLD}{GREEN}=== DEMO DOKONČENO ÚSPĚŠNĚ ==={RESET}")
     print_info("Všechny kroky proběhly přes Message Broker a binární úložiště Haystack.")
+    time.sleep(2) # Necháme doznít poslední zprávy z brokeru
 
 if __name__ == "__main__":
     run_demo()
