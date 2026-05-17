@@ -44,27 +44,42 @@ def print_success(msg):
 # --- BROKER MONITOR THREAD ---
 def broker_monitor():
     async def listen():
-        try:
-            async with websockets.connect(WS_URL) as ws:
-                # Odebíráme všechna důležitá témata pro demo
-                topics = ["storage.write", "storage.ack", "image.jobs", "image.done"]
-                for t in topics:
-                    await ws.send(msgpack.packb({"action": "subscribe", "topic": t}))
-                
-                while True:
-                    raw = await ws.recv()
-                    data = msgpack.unpackb(raw)
-                    if data.get("action") == "deliver":
-                        topic = data.get("topic")
-                        payload = data.get("payload")
-                        # Zkrátíme binární data pro výpis
-                        display_payload = payload.copy()
-                        if "data" in display_payload:
-                            display_payload["data"] = f"<{len(payload['data'])} bytes of binary data>"
+        while True:
+            try:
+                async with websockets.connect(WS_URL) as ws:
+                    # Odebíráme všechna důležitá témata pro demo
+                    topics = ["storage.write", "storage.ack", "image.jobs", "image.done"]
+                    for t in topics:
+                        # Vždy posíláme subscribe jako JSON pro jednoduchost monitoru
+                        await ws.send(json.dumps({"action": "subscribe", "topic": t}))
+                    
+                    while True:
+                        raw = await ws.recv()
+                        data = None
                         
-                        print_broker(f"Téma: {BOLD}{topic}{RESET} | Zpráva: {json.dumps(display_payload)}")
-        except Exception as e:
-            pass
+                        # Zkusíme MsgPack
+                        try:
+                            data = msgpack.unpackb(raw)
+                        except:
+                            # Zkusíme JSON
+                            try:
+                                data = json.loads(raw)
+                            except:
+                                continue
+
+                        if data and data.get("action") == "deliver":
+                            topic = data.get("topic")
+                            payload = data.get("payload")
+                            
+                            # Zkrátíme binární data pro výpis
+                            display_payload = payload.copy() if isinstance(payload, dict) else {"data": payload}
+                            if isinstance(display_payload, dict) and "data" in display_payload and isinstance(display_payload["data"], bytes):
+                                display_payload["data"] = f"<{len(display_payload['data'])} bytes of binary data>"
+                            
+                            print_broker(f"Téma: {BOLD}{topic}{RESET} | Zpráva: {json.dumps(display_payload)}")
+            except Exception as e:
+                # print_broker(f"Chyba monitoru: {e}") # Pro debug
+                await asyncio.sleep(2)
 
     asyncio.run(listen())
 
